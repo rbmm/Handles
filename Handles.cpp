@@ -2,10 +2,40 @@
 
 _NT_BEGIN
 
+union NT_OS_VER 
+{
+	ULONG FullVersion;
+	struct  
+	{
+		USHORT Build;
+		union {
+			USHORT Version;
+			struct  
+			{
+				UCHAR Minor;
+				UCHAR Major;
+			};
+		};
+	};
+
+	NT_OS_VER();
+};
+
+NT_OS_VER g_nt_ver;
+
+NT_OS_VER::NT_OS_VER()
+{
+	ULONG M, m, b;
+	RtlGetNtVersionNumbers(&M, &m, &b);
+	Build = (USHORT)b;
+	Minor = (UCHAR)m;
+	Major = (UCHAR)M;
+}
+
 class COBJECT_ALL_TYPES_INFORMATION
 {
 	POBJECT_TYPE_INFORMATION _TypeInformation = 0;
-	ULONG _NumberOfTypes = 0, _TypeIndexDelta = 0;
+	ULONG _NumberOfTypes = 0, _FirstTypeIndex = 0;
 
 	NTSTATUS Init(POBJECT_TYPES_INFORMATION pTypes, ULONG cb);
 
@@ -18,7 +48,7 @@ public:
 
 	ULONG maxIndex()
 	{
-		return _NumberOfTypes + _TypeIndexDelta;
+		return _NumberOfTypes + _FirstTypeIndex;
 	}
 
 	operator const OBJECT_TYPE_INFORMATION*()
@@ -52,14 +82,9 @@ int COBJECT_ALL_TYPES_INFORMATION::TypeIndexToIndex(ULONG TypeIndex)
 	{
 		POBJECT_TYPE_INFORMATION TypeInformation = _TypeInformation;
 
-		ULONG index = TypeIndex - _TypeIndexDelta;
+		ULONG index = TypeIndex - _FirstTypeIndex;
 
-		if (index > NumberOfTypes)
-		{
-			return -1;
-		}
-
-		if (TypeInformation[index].TypeIndex == TypeIndex)
+		if (index < NumberOfTypes && TypeInformation[index].TypeIndex == TypeIndex)
 		{
 			return index;
 		}
@@ -129,13 +154,25 @@ NTSTATUS COBJECT_ALL_TYPES_INFORMATION::Init(POBJECT_TYPES_INFORMATION pTypes, U
 			pti = pTypes->TypeInformation;
 			pv = TypeInformation + NumberOfTypes;
 
-			_TypeIndexDelta = pti->TypeIndex;
+			UCHAR TypeIndex = 2;
+
+			if (g_nt_ver.Version < _WIN32_WINNT_WINBLUE)
+			{
+				pti->TypeIndex = 2;
+			}
+
+			_FirstTypeIndex = pti->TypeIndex;
 
 			DbgPrint(
 				" I  Access       GE        GR        GW        GA        O        mO         H       mH        PT       IA    Name\r\n"
 				"==================================================================================================================\r\n");
 			do 
 			{
+				if (g_nt_ver.Version < _WIN32_WINNT_WINBLUE)
+				{
+					pti->TypeIndex = TypeIndex++;
+				}
+
 				DbgPrint("%02x %08x { %08x, %08x, %08x, %08x} %08x(%08x) %08x(%08x) %08x %08x %wZ\r\n", 
 					pti->TypeIndex, 
 					pti->ValidAccessMask,
@@ -443,8 +480,13 @@ void XD(_In_ PSYSTEM_HANDLE_INFORMATION_EX pshie, _In_ ULONG_PTR UniqueProcessId
 	}
 }
 
+#include "../inc/initterm.h"
+
 void WINAPI ep(void*)
 {
+	initterm();
+	DbgPrint("%04x %08x %u.%u.%u\n", g_nt_ver.Version, g_nt_ver.FullVersion, g_nt_ver.Major, g_nt_ver.Minor, g_nt_ver.Build);
+
 	BOOLEAN b;
 	RtlAdjustPrivilege(SE_DEBUG_PRIVILEGE, TRUE, FALSE, &b);
 
@@ -461,6 +503,8 @@ void WINAPI ep(void*)
 			}
 		}
 	}
+
+	destroyterm();
 
 	ExitProcess(0);
 }
